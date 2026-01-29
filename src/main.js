@@ -1,4 +1,4 @@
-import { EditorView, basicSetup } from "codemirror";
+import { EditorView, basicSetup, keymap } from "codemirror";
 import { EditorState, Compartment } from "@codemirror/state";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
