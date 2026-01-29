@@ -110,7 +110,7 @@ const previewPane = document.getElementById("preview-pane");
 async function init() {
   setupTheme();
   setupEventListeners();
-  await initEditor();
+  showWelcomeScreen();
 
   // Initialize git directory
   try {
@@ -128,12 +128,30 @@ async function init() {
   }
 }
 
-async function initEditor() {
+function showWelcomeScreen() {
+  editorHost.innerHTML = `
+    <div class="welcome-screen">
+      <img src="./logo.png" alt="Indextor Logo" class="welcome-logo" />
+      <h1 class="welcome-title">Welcome to Indextor</h1>
+      <p class="welcome-subtitle">Open a folder to start building your next project with beauty and speed.</p>
+      <button class="btn btn-primary" id="welcome-open-btn" style="padding: 12px 24px; font-size: 1rem;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        Open Folder
+      </button>
+    </div>
+  `;
+  document.getElementById('welcome-open-btn').addEventListener('click', openFolder);
+
+  // Clear the label
+  document.getElementById('current-file-label').textContent = 'No file open';
+}
+
+async function initEditor(content = "", langExt = html()) {
   const themeRef = new Compartment();
   window.themeCompartment = themeRef; // Global ref for toggle
 
   const startState = EditorState.create({
-    doc: "<!-- Open a folder to start editing -->\n<div class='welcome'>\n  <h1>Welcome to Indextor</h1>\n  <p>Open a folder to start building.</p>\n</div>\n<style>\n  .welcome { font-family: sans-serif; text-align: center; color: #888; margin-top: 20%; }\n</style>",
+    doc: content,
     extensions: [
       basicSetup,
       keymap.of([
@@ -141,15 +159,16 @@ async function initEditor() {
         ...historyKeymap,
         ...foldKeymap,
         ...completionKeymap,
+        ...searchKeymap,
         indentWithTab
       ]),
-      html(),
+      langExt,
       autoCloseTags(),
       bracketMatching(),
       closeBrackets(),
       autocompletion({
         activateOnTyping: true,
-        override: [htmlAttributeCompletions]
+        override: langExt === html() ? [htmlAttributeCompletions] : null
       }),
       highlightSelectionMatches(),
       themeRef.of(isDarkMode ? oneDark : EditorView.theme({}, { dark: false })),
@@ -163,6 +182,10 @@ async function initEditor() {
       })
     ]
   });
+
+  if (editor) {
+    editor.destroy();
+  }
 
   editor = new EditorView({
     state: startState,
@@ -195,14 +218,6 @@ function setupEventListeners() {
   document.getElementById('view-toggle-btn').addEventListener('click', toggleViewMode);
   document.getElementById('refresh-preview').addEventListener('click', updatePreview);
   document.getElementById('save-btn').addEventListener('click', saveCurrentFile);
-
-  // Close warning banner
-  const closeWarningBtn = document.getElementById('close-warning');
-  if (closeWarningBtn) {
-    closeWarningBtn.addEventListener('click', () => {
-      document.getElementById('homepage-warning').style.display = 'none';
-    });
-  }
 
   // Keyboard shortcut for save
   document.addEventListener('keydown', (e) => {
@@ -611,40 +626,7 @@ async function loadFile(path) {
 
   // Initialize Editor
   try {
-    const state = EditorState.create({
-      doc: content,
-      extensions: [
-        basicSetup,
-        keymap.of([
-          ...defaultKeymap,
-          ...historyKeymap,
-          ...foldKeymap,
-          ...completionKeymap,
-          ...searchKeymap,
-          indentWithTab
-        ]),
-        langExt,
-        autoCloseTags(),
-        bracketMatching(),
-        closeBrackets(),
-        autocompletion({
-          activateOnTyping: true,
-          override: langExt === html() ? [htmlAttributeCompletions] : null
-        }),
-        highlightSelectionMatches(),
-        window.themeCompartment.of(isDarkMode ? oneDark : EditorView.theme({}, { dark: false })),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            fileContent.set(path, update.state.doc.toString());
-          }
-        })
-      ]
-    });
-
-    editor = new EditorView({
-      state: state,
-      parent: editorHost
-    });
+    await initEditor(content, langExt);
   } catch (e) {
     console.error("Error loading editor:", e);
     editorHost.innerHTML = `<div class="empty-state" style="color: red;">

@@ -47,8 +47,56 @@ self.addEventListener('fetch', (event) => {
                 headers: { 'Content-Type': contentType }
             }));
         } else {
-            // Fallback or 404
-            event.respondWith(new Response('File not found in preview', { status: 404 }));
+            // Fallback or 404 - Show funny connection error image
+            const errorHtml = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Could Not Connect</title>
+                    <style>
+                        body { 
+                            background: #0f172a; 
+                            display: flex; 
+                            align-items: center; 
+                            justify-content: center; 
+                            height: 100vh; 
+                            margin: 0; 
+                            color: white; 
+                            font-family: 'Inter', -apple-system, sans-serif;
+                            overflow: hidden;
+                        }
+                        .error-container { 
+                            text-align: center; 
+                            max-width: 500px; 
+                            padding: 20px;
+                            animation: fadeIn 0.8s ease-out;
+                        }
+                        img { 
+                            width: 100%; 
+                            max-width: 400px; 
+                            border-radius: 24px; 
+                            box-shadow: 0 20px 50px rgba(19, 108, 255, 0.3);
+                            margin-bottom: 20px;
+                        }
+                        h2 { margin: 0; font-size: 1.5rem; opacity: 0.9; }
+                        @keyframes fadeIn {
+                            from { opacity: 0; transform: translateY(20px); }
+                            to { opacity: 1; transform: translateY(0); }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="error-container">
+                        <img src="/error.png" alt="Could not connect to file" />
+                    </div>
+                </body>
+                </html>
+            `;
+            event.respondWith(new Response(errorHtml, {
+                status: 200,
+                headers: { 'Content-Type': 'text/html' }
+            }));
         }
     }
 });
