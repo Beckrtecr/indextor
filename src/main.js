@@ -1,14 +1,83 @@
 import { EditorView, basicSetup } from "codemirror";
-import { keymap } from "@codemirror/view";
+import { keymap, drawSelection, highlightActiveLine, dropCursor, rectangularSelection, crosshairCursor } from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
-import { defaultKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, indentWithTab, history, historyKeymap } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { autocompletion, closeBrackets, completionKeymap, closeBracketsKeymap, snippet } from "@codemirror/autocomplete";
+import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting, defaultHighlightStyle, LanguageDescription } from "@codemirror/language";
+import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 import LightningFS from "@isomorphic-git/lightning-fs";
+
+// --- Custom Extensions ---
+
+const selfClosing = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
+
+// Simple auto-close tag extension for HTML
+function autoCloseTags() {
+  return EditorView.inputHandler.of((view, from, to, text) => {
+    if (text !== ">" || view.state.readOnly) return false;
+    let { state } = view;
+    let changes = state.changeByRange(range => {
+      let { from, to } = range;
+      let line = state.doc.lineAt(from);
+      let textBefore = line.text.slice(0, from - line.from);
+      let match = /<([a-zA-Z0-9\-]+)[^>]*$/.exec(textBefore);
+      if (match) {
+        let tagName = match[1];
+        if (selfClosing.includes(tagName.toLowerCase())) return { range };
+
+        let insert = ">" + "</" + tagName + ">";
+        return {
+          range: { from: from + 1, to: from + 1 },
+          changes: { from, to, insert }
+        };
+      }
+      return { range };
+    });
+    view.dispatch(changes);
+    return true;
+  });
+}
+
+// Custom HTML attribute completions
+function htmlAttributeCompletions(context) {
+  let word = context.matchBefore(/\w*/);
+  if (!word || (word.from === word.to && !context.explicit)) return null;
+
+  // Check if we are inside a tag
+  let textBefore = context.state.doc.sliceString(Math.max(0, context.pos - 500), context.pos);
+  let lastOpenTag = textBefore.lastIndexOf('<');
+  let lastCloseTag = textBefore.lastIndexOf('>');
+
+  if (lastOpenTag > lastCloseTag) {
+    // We are likely inside a tag
+    return {
+      from: word.from,
+      options: [
+        { label: "class", type: "property", apply: snippet('class="${}"'), detail: "CSS class" },
+        { label: "id", type: "property", apply: snippet('id="${}"'), detail: "Unique ID" },
+        { label: "style", type: "property", apply: snippet('style="${}"'), detail: "Inline CSS" },
+        { label: "href", type: "property", apply: snippet('href="${}"'), detail: "Link URL" },
+        { label: "src", type: "property", apply: snippet('src="${}"'), detail: "Source URL" },
+        { label: "alt", type: "property", apply: snippet('alt="${}"'), detail: "Alt text" },
+        { label: "type", type: "property", apply: snippet('type="${}"'), detail: "Input type" },
+        { label: "value", type: "property", apply: snippet('value="${}"'), detail: "Input value" },
+        { label: "placeholder", type: "property", apply: snippet('placeholder="${}"'), detail: "Placeholder text" },
+        { label: "name", type: "property", apply: snippet('name="${}"'), detail: "Form name" },
+        { label: "rel", type: "property", apply: snippet('rel="${}"'), detail: "Relationship" },
+        { label: "target", type: "property", apply: snippet('target="_blank"'), detail: "Open target" },
+        { label: "onclick", type: "property", apply: snippet('onclick="${}"'), detail: "Click handler" },
+      ],
+      validFor: /^\w*$/
+    };
+  }
+  return null;
+}
 
 // Initialize FS for Git
 const fs = new LightningFS("indextor-fs");
@@ -21,8 +90,11 @@ let currentFileHandle = null;
 let fileHandles = new Map(); // path -> handle
 let fileContent = new Map(); // path -> content
 let editor = null;
-let isDarkMode = false;
-let currentMode = 'split'; // split, editor, preview
+let isDarkMode = true;
+let currentMode = 'editor'; // split, editor, preview
+let creatingNewItem = null; // { type: 'file' | 'folder', parentNode: node }
+let renamingItem = null;
+let currentPreviewFile = 'index.html';
 
 // DOM Elements
 const editorHost = document.getElementById("editor-host");
@@ -44,10 +116,19 @@ async function init() {
   try {
     await pf.mkdir(GIT_DIR);
   } catch (e) { }
+
+  // Register Preview Service Worker
+  if ('serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.register('./preview-sw.js');
+      console.log('Preview Service Worker registered');
+    } catch (err) {
+      console.error('Service Worker registration failed:', err);
+    }
+  }
 }
 
 async function initEditor() {
-  /* const { Compartment } = await import("@codemirror/state"); // Imported at top level */
   const themeRef = new Compartment();
   window.themeCompartment = themeRef; // Global ref for toggle
 
@@ -55,8 +136,22 @@ async function initEditor() {
     doc: "<!-- Open a folder to start editing -->\n<div class='welcome'>\n  <h1>Welcome to Indextor</h1>\n  <p>Open a folder to start building.</p>\n</div>\n<style>\n  .welcome { font-family: sans-serif; text-align: center; color: #888; margin-top: 20%; }\n</style>",
     extensions: [
       basicSetup,
-      keymap.of([defaultKeymap, indentWithTab]),
+      keymap.of([
+        ...defaultKeymap,
+        ...historyKeymap,
+        ...foldKeymap,
+        ...completionKeymap,
+        indentWithTab
+      ]),
       html(),
+      autoCloseTags(),
+      bracketMatching(),
+      closeBrackets(),
+      autocompletion({
+        activateOnTyping: true,
+        override: [htmlAttributeCompletions]
+      }),
+      highlightSelectionMatches(),
       themeRef.of(isDarkMode ? oneDark : EditorView.theme({}, { dark: false })),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
@@ -78,18 +173,16 @@ async function initEditor() {
 
 
 function setupTheme() {
-  const savedTheme = localStorage.getItem('theme');
-  isDarkMode = savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  isDarkMode = true;
   applyTheme();
 }
 
 function applyTheme() {
-  document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
-  localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', 'dark');
 
   if (editor && window.themeCompartment) {
     editor.dispatch({
-      effects: window.themeCompartment.reconfigure(isDarkMode ? oneDark : EditorView.theme({}, { dark: false }))
+      effects: window.themeCompartment.reconfigure(oneDark)
     });
   }
 }
@@ -97,19 +190,19 @@ function applyTheme() {
 function setupEventListeners() {
   document.getElementById('folder-btn').addEventListener('click', openFolder);
 
-  document.getElementById('theme-toggle').addEventListener('click', () => {
-    isDarkMode = !isDarkMode;
-    applyTheme();
-    if (editor && window.themeCompartment) {
-      editor.dispatch({
-        effects: window.themeCompartment.reconfigure(isDarkMode ? oneDark : EditorView.theme({}, { dark: false }))
-      });
-    }
-  });
+  // Theme toggle removed as requested
 
   document.getElementById('view-toggle-btn').addEventListener('click', toggleViewMode);
   document.getElementById('refresh-preview').addEventListener('click', updatePreview);
   document.getElementById('save-btn').addEventListener('click', saveCurrentFile);
+
+  // Close warning banner
+  const closeWarningBtn = document.getElementById('close-warning');
+  if (closeWarningBtn) {
+    closeWarningBtn.addEventListener('click', () => {
+      document.getElementById('homepage-warning').style.display = 'none';
+    });
+  }
 
   // Keyboard shortcut for save
   document.addEventListener('keydown', (e) => {
@@ -122,30 +215,6 @@ function setupEventListeners() {
 
 // --- Sidebar Logic ---
 
-// Tab Switching
-const tabExplorer = document.getElementById('tab-explorer');
-const tabSearch = document.getElementById('tab-search');
-const viewExplorer = document.getElementById('explorer-view');
-const viewSearch = document.getElementById('search-view');
-
-function switchSidebarTab(tabName) {
-  if (tabName === 'explorer') {
-    tabExplorer.classList.add('active');
-    tabSearch.classList.remove('active');
-    viewExplorer.classList.remove('hidden');
-    viewSearch.classList.add('hidden');
-  } else if (tabName === 'search') {
-    tabExplorer.classList.remove('active');
-    tabSearch.classList.add('active');
-    viewExplorer.classList.add('hidden');
-    viewSearch.classList.remove('hidden');
-    document.getElementById('search-input').focus();
-  }
-}
-
-tabExplorer.addEventListener('click', () => switchSidebarTab('explorer'));
-tabSearch.addEventListener('click', () => switchSidebarTab('search'));
-
 // Resizable Sidebar
 const resizer = document.getElementById('sidebar-resizer');
 let isResizing = false;
@@ -154,15 +223,13 @@ resizer.addEventListener('mousedown', (e) => {
   isResizing = true;
   resizer.classList.add('resizing');
   document.body.style.cursor = 'col-resize';
+  previewFrame.style.pointerEvents = 'none'; // Prevent iframe from stealing events
 });
 
 document.addEventListener('mousemove', (e) => {
   if (!isResizing) return;
-  // Calculate new width relative to the left activity bar (48px)
-  // e.clientX is total X. Activity bar is 48px.
-  // Sidebar starts at 48px.
-  // Width = e.clientX - 48
-  let newWidth = e.clientX - 48;
+  // Calculate new width relative to the left (0px now)
+  let newWidth = e.clientX;
   if (newWidth < 150) newWidth = 150;
   if (newWidth > 600) newWidth = 600;
   sidebarEl.style.width = `${newWidth}px`;
@@ -172,7 +239,41 @@ document.addEventListener('mouseup', () => {
   isResizing = false;
   resizer.classList.remove('resizing');
   document.body.style.cursor = 'default';
+  previewFrame.style.pointerEvents = 'auto'; // Re-enable iframe events
 });
+
+// Workspace Resizer (Editor / Preview)
+const workspaceResizer = document.getElementById('workspace-resizer');
+let isWorkspaceResizing = false;
+
+if (workspaceResizer) {
+  workspaceResizer.addEventListener('mousedown', (e) => {
+    isWorkspaceResizing = true;
+    workspaceResizer.classList.add('resizing');
+    document.body.style.cursor = 'col-resize';
+    previewFrame.style.pointerEvents = 'none'; // Prevent iframe from stealing events
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isWorkspaceResizing) return;
+    const sidebarWidth = sidebarEl.getBoundingClientRect().width;
+    const containerWidth = document.querySelector('.main-content').getBoundingClientRect().width;
+    let newEditorWidth = e.clientX - sidebarWidth;
+
+    if (newEditorWidth < 100) newEditorWidth = 100;
+    if (newEditorWidth > containerWidth - 100) newEditorWidth = containerWidth - 100;
+
+    editorPane.style.flex = 'none';
+    editorPane.style.width = `${newEditorWidth}px`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    isWorkspaceResizing = false;
+    workspaceResizer.classList.remove('resizing');
+    document.body.style.cursor = 'default';
+    previewFrame.style.pointerEvents = 'auto'; // Re-enable iframe events
+  });
+}
 
 // --- File System & Tree ---
 
@@ -198,8 +299,6 @@ async function openFolder() {
     // Update Explorer Header
     document.querySelector('#explorer-view .sidebar-title').textContent = handle.name.toUpperCase();
 
-    // Switch to explorer
-    switchSidebarTab('explorer');
 
     // Default open index.html
     if (fileHandles.has('index.html')) {
@@ -228,11 +327,14 @@ async function scanDirectory(dirHandle, treeNode) {
 
     if (entry.kind === 'file') {
       fileHandles.set(relativePath, entry);
-      // Lazy load text for search if needed, similar to before
+      // Lazy load content
+      const file = await entry.getFile();
       if (isTextFile(entry.name)) {
-        const file = await entry.getFile();
         const text = await file.text();
         fileContent.set(relativePath, text);
+      } else {
+        const buffer = await file.arrayBuffer();
+        fileContent.set(relativePath, buffer);
       }
     } else if (entry.kind === 'directory') {
       await scanDirectory(entry, node);
@@ -242,6 +344,61 @@ async function scanDirectory(dirHandle, treeNode) {
 
 function renderFileTree() {
   fileListEl.innerHTML = '';
+
+  // If creating a new item, show inline input at the top
+  if (creatingNewItem) {
+    const inputContainer = document.createElement('div');
+    inputContainer.className = 'file-item inline-input-container';
+    inputContainer.style.paddingLeft = '0px';
+
+    const icon = document.createElement('div');
+    icon.className = 'icon-box';
+    icon.innerHTML = creatingNewItem.type === 'folder' ? `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #64748b;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>` : '📄';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'inline-name-input';
+    input.placeholder = creatingNewItem.type === 'folder' ? 'Folder name...' : 'File name...';
+    input.autocomplete = 'off';
+
+    inputContainer.appendChild(icon);
+    inputContainer.appendChild(input);
+    fileListEl.appendChild(inputContainer);
+
+    // Focus the input
+    setTimeout(() => input.focus(), 0);
+
+    // Handle input submission
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const name = input.value.trim();
+        if (name) {
+          if (creatingNewItem.type === 'file') {
+            await finalizeCreateFile(name, creatingNewItem.parentNode);
+          } else {
+            await finalizeCreateFolder(name, creatingNewItem.parentNode);
+          }
+        } else {
+          creatingNewItem = null;
+          renderFileTree();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        creatingNewItem = null;
+        renderFileTree();
+      }
+    });
+
+    // Handle blur (click outside)
+    input.addEventListener('blur', () => {
+      setTimeout(() => {
+        creatingNewItem = null;
+        renderFileTree();
+      }, 200);
+    });
+  }
+
   // Sort: Directories first, then files
   const children = Array.from(fileTree.children.values()).sort((a, b) => {
     if (a.kind === b.kind) return a.name.localeCompare(b.name);
@@ -278,7 +435,7 @@ function createTreeElement(node, level) {
   icon.className = 'icon-box';
 
   if (node.kind === 'directory') {
-    icon.innerHTML = '📁';
+    icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #64748b;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
   } else {
     if (node.name.endsWith('.html')) {
       icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
@@ -299,9 +456,49 @@ function createTreeElement(node, level) {
   content.appendChild(arrow);
   content.appendChild(icon);
 
-  const nameSpan = document.createElement('span');
-  nameSpan.textContent = node.name;
-  content.appendChild(nameSpan);
+  if (node === renamingItem) {
+    const inputNode = document.createElement('input');
+    inputNode.type = 'text';
+    inputNode.className = 'inline-name-input';
+    inputNode.value = node.name;
+    inputNode.autocomplete = 'off';
+    content.appendChild(inputNode);
+
+    setTimeout(() => {
+      inputNode.focus();
+      inputNode.select();
+    }, 0);
+
+    inputNode.onkeydown = async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const newName = inputNode.value.trim();
+        if (newName && newName !== node.name) {
+          await finalizeRename(node, newName);
+        } else {
+          renamingItem = null;
+          renderFileTree();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        renamingItem = null;
+        renderFileTree();
+      }
+    };
+
+    inputNode.onblur = () => {
+      setTimeout(() => {
+        if (renamingItem === node) {
+          renamingItem = null;
+          renderFileTree();
+        }
+      }, 200);
+    };
+  } else {
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = node.name;
+    content.appendChild(nameSpan);
+  }
 
   item.appendChild(content);
 
@@ -317,6 +514,13 @@ function createTreeElement(node, level) {
       item.classList.add('active');
       await loadFile(node.path);
     }
+  };
+
+  // Context menu (right-click)
+  item.oncontextmenu = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showContextMenu(e.clientX, e.clientY, node);
   };
 
 
@@ -411,8 +615,23 @@ async function loadFile(path) {
       doc: content,
       extensions: [
         basicSetup,
-        keymap.of([defaultKeymap, indentWithTab]),
+        keymap.of([
+          ...defaultKeymap,
+          ...historyKeymap,
+          ...foldKeymap,
+          ...completionKeymap,
+          ...searchKeymap,
+          indentWithTab
+        ]),
         langExt,
+        autoCloseTags(),
+        bracketMatching(),
+        closeBrackets(),
+        autocompletion({
+          activateOnTyping: true,
+          override: langExt === html() ? [htmlAttributeCompletions] : null
+        }),
+        highlightSelectionMatches(),
         window.themeCompartment.of(isDarkMode ? oneDark : EditorView.theme({}, { dark: false })),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -471,7 +690,7 @@ async function saveCurrentFile() {
 
     // Refresh preview if needed
     if (currentMode !== 'editor') {
-      updatePreview();
+      updatePreview(currentPreviewFile);
     }
   } catch (err) {
     console.error("Save error:", err);
@@ -479,201 +698,144 @@ async function saveCurrentFile() {
   }
 }
 
-async function updatePreview() {
-  if (!rootHandle) return;
-
-  // Find index.html
-  let indexContent = fileContent.get('index.html');
-  if (!indexContent) {
-    // Try to find it if not loaded
-    if (fileHandles.has('index.html')) {
-      const handle = fileHandles.get('index.html');
-      const file = await handle.getFile();
-      indexContent = await file.text();
-      fileContent.set('index.html', indexContent);
+async function syncFilesToSW() {
+  if (navigator.serviceWorker.controller) {
+    const filesObj = {};
+    for (const [path, content] of fileContent.entries()) {
+      // Transfer buffers directly if possible, or convert to typed arrays
+      if (content instanceof ArrayBuffer) {
+        filesObj[path] = content;
+      } else {
+        filesObj[path] = content;
+      }
     }
+    navigator.serviceWorker.controller.postMessage({
+      type: 'SET_FILES',
+      files: filesObj
+    });
   }
-
-  if (!indexContent) {
-    previewFrame.srcdoc = "<html><body style='font-family:sans-serif; color:#888; text-align:center; margin-top:100px;'><h3>No index.html found in root</h3></body></html>";
-    return;
-  }
-
-  // Inject CSS and JS from the project for a better preview
-  // This is a naive injection - it replaces relative paths with inline content
-  let finalHtml = indexContent;
-
-  // For each CSS/JS file we have in virtual memory, try to replace patterns if possible
-  // or just use srcdoc as is. For now, srcdoc is the simplest.
-  previewFrame.srcdoc = finalHtml;
 }
 
-function toggleViewMode() {
+async function updatePreview(previewFile) {
+  if (!rootHandle) return;
+  const fileToUse = (typeof previewFile === 'string') ? previewFile : currentPreviewFile;
+  currentPreviewFile = fileToUse;
+
+  await syncFilesToSW();
+
+  const timestamp = Date.now();
+  previewFrame.src = `/preview/${fileToUse}?t=${timestamp}`;
+}
+
+function showFileSelectionModal() {
+  return new Promise((resolve) => {
+    const htmlFiles = Array.from(fileHandles.keys()).filter(path => path.endsWith('.html'));
+
+    if (htmlFiles.length === 0) {
+      alert("No HTML files found in the project.");
+      resolve(null);
+      return;
+    }
+
+    if (htmlFiles.length === 1) {
+      resolve(htmlFiles[0]);
+      return;
+    }
+
+    // Create modal
+    const modalOverlay = document.createElement('div');
+    modalOverlay.className = 'modal-overlay';
+
+    const modalContent = document.createElement('div');
+    modalContent.className = 'modal-content fade-in';
+
+    modalContent.innerHTML = `
+      <div class="modal-header">
+        <h3>Choose File to Preview</h3>
+        <button class="icon-btn" id="modal-close">×</button>
+      </div>
+      <div class="modal-body">
+        ${htmlFiles.map(path => `
+          <div class="file-select-item" data-path="${path}">
+            <span class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+            </span>
+            <span>${path}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    modalOverlay.appendChild(modalContent);
+    document.body.appendChild(modalOverlay);
+
+    const closeModal = () => {
+      modalOverlay.remove();
+      resolve(null);
+    };
+
+    modalContent.addEventListener('click', (e) => {
+      const item = e.target.closest('.file-select-item');
+      if (item) {
+        const path = item.getAttribute('data-path');
+        modalOverlay.remove();
+        resolve(path);
+      }
+    });
+
+    modalContent.querySelector('#modal-close').onclick = closeModal;
+    modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+  });
+}
+
+async function toggleViewMode() {
   const btn = document.getElementById('view-toggle-btn');
   const span = btn.querySelector('span');
+  const wsResizer = document.getElementById('workspace-resizer');
 
   if (currentMode === 'editor') {
+    const fileToPreview = await showFileSelectionModal();
+    if (!fileToPreview) return;
+
     currentMode = 'split';
     previewPane.classList.remove('hidden');
-    editorPane.style.display = 'flex'; // Ensure visible
+    editorPane.classList.remove('hidden');
+    if (wsResizer) wsResizer.classList.remove('hidden');
+    editorPane.style.width = '50%'; // Reset to split
+    editorPane.style.flex = 'none';
     span.textContent = 'Preview';
+    updatePreview(fileToPreview);
   } else if (currentMode === 'split') {
     currentMode = 'preview';
     editorPane.classList.add('hidden');
-    previewPane.classList.remove('hidden'); // Ensure visible
+    previewPane.classList.remove('hidden');
+    if (wsResizer) wsResizer.classList.add('hidden');
     previewPane.style.flex = '1';
     span.textContent = 'Editor';
   } else {
     currentMode = 'editor';
     editorPane.classList.remove('hidden');
     previewPane.classList.add('hidden');
+    if (wsResizer) wsResizer.classList.add('hidden');
+    editorPane.style.flex = '1';
+    editorPane.style.width = 'auto';
     span.textContent = 'Split';
-  }
-
-  if (currentMode !== 'editor') {
-    updatePreview();
   }
 }
 
 // --- Search Logic ---
 
-const searchInput = document.getElementById('search-input');
-const replaceInput = document.getElementById('replace-input');
-const replaceAllBtn = document.getElementById('replace-all-btn');
-const searchResultsList = document.getElementById('search-results');
-
-searchInput.addEventListener('input', (e) => {
-  performSearch(e.target.value);
-});
-
-replaceAllBtn.addEventListener('click', () => {
-  performReplaceAll();
-});
-
-let searchResults = []; // [{ path, line, content, index, length }]
-
-function performSearch(query) {
-  searchResultsList.innerHTML = '';
-  searchResults = [];
-
-  if (!query) return;
-
-  const lowerQuery = query.toLowerCase();
-
-  for (const [path, content] of fileContent.entries()) {
-    const lines = content.split('\n');
-    let fileMatches = [];
-
-    lines.forEach((line, i) => {
-      if (line.toLowerCase().includes(lowerQuery)) {
-        // Find all occurrences in line
-        let startIndex = 0;
-        let index;
-        while ((index = line.toLowerCase().indexOf(lowerQuery, startIndex)) > -1) {
-          fileMatches.push({
-            line: i + 1,
-            content: line.trim(),
-            fullLine: line,
-            index: index, // Index in line
-          });
-          startIndex = index + lowerQuery.length;
-        }
-      }
-    });
-
-    if (fileMatches.length > 0) {
-      renderSearchResults(path, fileMatches);
-    }
-  }
-}
-
-function renderSearchResults(path, matches) {
-  const fileHeader = document.createElement('div');
-  fileHeader.className = 'search-file-header';
-  fileHeader.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
-        <span>${path}</span>
-        <span style="margin-left:auto; font-size:0.7em; background:rgba(0,0,0,0.1); padding:0 6px; border-radius:10px;">${matches.length}</span>
-    `;
-
-  fileHeader.onclick = () => loadFile(path);
-
-  searchResultsList.appendChild(fileHeader);
-
-  matches.forEach(match => {
-    const matchEl = document.createElement('div');
-    matchEl.className = 'search-match';
-    // Highlight logic
-    matchEl.textContent = match.content; // Simple text for now, could add highliting span
-    // TODO: Visual highlight of the matched term
-
-    matchEl.onclick = async () => {
-      await loadFile(path);
-      // Scroll to line (CodeMirror API)
-      // Need to wait for editor init
-      if (editor) {
-        const lineInfo = editor.state.doc.line(match.line);
-        editor.dispatch({
-          selection: { anchor: lineInfo.from },
-          effects: EditorView.scrollIntoView(lineInfo.from, { y: "center" })
-        });
-      }
-    };
-    searchResultsList.appendChild(matchEl);
-  });
-}
-
-async function performReplaceAll() {
-  const query = searchInput.value;
-  const replacement = replaceInput.value;
-  if (!query) return;
-
-  let count = 0;
-
-  // Iterate all files with matches
-  for (const [path, content] of fileContent.entries()) {
-    if (content.toLowerCase().includes(query.toLowerCase())) {
-      // Global regex replace (case insensitive for this demo?)
-      // Creating a regex from string safely
-      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-
-      const newContent = content.replace(regex, replacement);
-
-      if (newContent !== content) {
-        fileContent.set(path, newContent);
-
-        // Write to disk
-        const handle = fileHandles.get(path);
-        if (handle) {
-          const writable = await handle.createWritable();
-          await writable.write(newContent);
-          await writable.close();
-        }
-
-        // If this is the current file, update editor
-        if (currentFileHandle && getPathFromHandle(currentFileHandle) === path) {
-          const { EditorState } = await import("@codemirror/state");
-          editor.dispatch({
-            changes: { from: 0, to: editor.state.doc.length, insert: newContent }
-          });
-        }
-
-        count++;
-      }
-    }
-  }
-
-  // Re-run search to clear/update results
-  performSearch(query);
-  alert(`Replaced occurrences in ${count} files.`);
-}
+// --- Search Logic Removed ---
+// Use Browser Find (Cmd+F) instead.
 
 // --- File Actions ---
 
 const newFileBtn = document.getElementById('new-file-btn');
+const newFolderBtn = document.getElementById('new-folder-btn');
 const importFileBtn = document.getElementById('import-file-btn');
 // Check if elements exist to avoid null errors (if index.html isn't updated yet or cache issue)
 if (newFileBtn) newFileBtn.addEventListener('click', createNewFile);
+if (newFolderBtn) newFolderBtn.addEventListener('click', createNewFolder);
 if (importFileBtn) importFileBtn.addEventListener('click', importFile);
 
 async function createNewFile() {
@@ -682,13 +844,47 @@ async function createNewFile() {
     return;
   }
 
-  const fileName = prompt("Enter file name (e.g., script.js):");
-  if (!fileName) return;
+  // Set state to show inline input
+  creatingNewItem = { type: 'file', parentNode: fileTree };
+  renderFileTree();
+}
+
+async function finalizeCreateFile(fileName, parentNode) {
+  if (!fileName || !fileName.trim()) return;
+  fileName = fileName.trim();
 
   try {
-    const fileHandle = await rootHandle.getFileHandle(fileName, { create: true });
+    // Get parent directory handle
+    let parentHandle = rootHandle;
+    if (parentNode.path) {
+      const pathParts = parentNode.path.split('/');
+      for (const part of pathParts) {
+        parentHandle = await parentHandle.getDirectoryHandle(part);
+      }
+    }
+
+    const fileHandle = await parentHandle.getFileHandle(fileName, { create: true });
+
+    // Boilerplate for HTML files
+    if (fileName.toLowerCase().endsWith('.html')) {
+      const boilerplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    
+</body>
+</html>`;
+      const writable = await fileHandle.createWritable();
+      await writable.write(boilerplate);
+      await writable.close();
+    }
 
     // Refresh tree
+    creatingNewItem = null;
     fileHandles.clear();
     fileContent.clear();
     fileTree = { children: new Map(), name: rootHandle.name, path: '', kind: 'directory' };
@@ -696,10 +892,13 @@ async function createNewFile() {
     renderFileTree();
 
     // Open it
-    await loadFile(fileName);
+    const newPath = parentNode.path ? `${parentNode.path}/${fileName}` : fileName;
+    await loadFile(newPath);
   } catch (err) {
     console.error("Error creating file:", err);
     alert("Could not create file. " + err.message);
+    creatingNewItem = null;
+    renderFileTree();
   }
 }
 
@@ -742,6 +941,223 @@ async function importFile() {
 
 function isImageFile(name) {
   return /\.(png|jpg|jpeg|gif|webp|svg|ico)$/i.test(name);
+}
+
+// --- Context Menu ---
+
+let contextMenu = null;
+
+function showContextMenu(x, y, node) {
+  // Remove existing menu
+  if (contextMenu) {
+    contextMenu.remove();
+  }
+
+  contextMenu = document.createElement('div');
+  contextMenu.className = 'context-menu';
+  contextMenu.style.left = `${x}px`;
+  contextMenu.style.top = `${y}px`;
+
+  const menuItems = [];
+
+  // Rename option
+  menuItems.push({
+    label: 'Rename',
+    icon: '✏️',
+    action: () => renameItem(node)
+  });
+
+  // Delete option
+  menuItems.push({
+    label: 'Delete',
+    icon: '🗑️',
+    action: () => deleteItem(node)
+  });
+
+  menuItems.forEach(item => {
+    const menuItem = document.createElement('div');
+    menuItem.className = 'context-menu-item';
+    menuItem.innerHTML = `<span class="menu-icon">${item.icon}</span><span>${item.label}</span>`;
+    menuItem.onclick = () => {
+      item.action();
+      contextMenu.remove();
+      contextMenu = null;
+    };
+    contextMenu.appendChild(menuItem);
+  });
+
+  document.body.appendChild(contextMenu);
+
+  // Close menu on click outside
+  const closeMenu = (e) => {
+    if (contextMenu && !contextMenu.contains(e.target)) {
+      contextMenu.remove();
+      contextMenu = null;
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+async function createNewFolder() {
+  if (!rootHandle) {
+    alert("Please open a project folder first.");
+    return;
+  }
+
+  // Set state to show inline input
+  creatingNewItem = { type: 'folder', parentNode: fileTree };
+  renderFileTree();
+}
+
+async function finalizeCreateFolder(folderName, parentNode) {
+  if (!folderName || !folderName.trim()) return;
+  folderName = folderName.trim();
+
+  try {
+    // Get parent directory handle
+    let parentHandle = rootHandle;
+    if (parentNode.path) {
+      const pathParts = parentNode.path.split('/');
+      for (const part of pathParts) {
+        parentHandle = await parentHandle.getDirectoryHandle(part);
+      }
+    }
+
+    await parentHandle.getDirectoryHandle(folderName, { create: true });
+
+    // Refresh tree
+    creatingNewItem = null;
+    fileHandles.clear();
+    fileContent.clear();
+    fileTree = { children: new Map(), name: rootHandle.name, path: '', kind: 'directory' };
+    await scanDirectory(rootHandle, fileTree);
+    renderFileTree();
+  } catch (err) {
+    console.error("Error creating folder:", err);
+    alert("Could not create folder. " + err.message);
+    creatingNewItem = null;
+    renderFileTree();
+  }
+}
+
+async function renameItem(node) {
+  if (!rootHandle) return;
+  renamingItem = node;
+  renderFileTree();
+}
+
+async function finalizeRename(node, newName) {
+  try {
+    // Get parent directory handle
+    const parentPath = node.path.substring(0, node.path.lastIndexOf('/'));
+    let parentHandle = rootHandle;
+
+    if (parentPath) {
+      const pathParts = parentPath.split('/');
+      for (const part of pathParts) {
+        parentHandle = await parentHandle.getDirectoryHandle(part);
+      }
+    }
+
+    // Create new item with new name
+    if (node.kind === 'file') {
+      // Copy file content
+      const oldFile = await node.handle.getFile();
+      const content = await oldFile.arrayBuffer();
+
+      const newHandle = await parentHandle.getFileHandle(newName, { create: true });
+      const writable = await newHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      // Delete old file
+      await parentHandle.removeEntry(node.name);
+    } else {
+      // For directories, recursively copy
+      await copyDirectory(node.handle, parentHandle, newName);
+      // Delete old directory
+      await parentHandle.removeEntry(node.name, { recursive: true });
+    }
+
+    // Refresh tree
+    renamingItem = null;
+    fileHandles.clear();
+    fileContent.clear();
+    fileTree = { children: new Map(), name: rootHandle.name, path: '', kind: 'directory' };
+    await scanDirectory(rootHandle, fileTree);
+    renderFileTree();
+
+    // If renamed file was open, update handle or close
+    if (currentFileHandle === node.handle) {
+      currentFileHandle = null;
+      document.getElementById('current-file-label').textContent = 'No file open';
+      // Re-open if it was a file
+      if (node.kind === 'file') {
+        const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+        await loadFile(newPath);
+      }
+    }
+  } catch (err) {
+    console.error("Error renaming item:", err);
+    alert("Could not rename item. " + err.message);
+    renamingItem = null;
+    renderFileTree();
+  }
+}
+
+async function copyDirectory(srcHandle, destParentHandle, newName) {
+  const newDirHandle = await destParentHandle.getDirectoryHandle(newName, { create: true });
+  for await (const entry of srcHandle.values()) {
+    if (entry.kind === 'file') {
+      const file = await entry.getFile();
+      const newFileHandle = await newDirHandle.getFileHandle(entry.name, { create: true });
+      const writable = await newFileHandle.createWritable();
+      await writable.write(file);
+      await writable.close();
+    } else if (entry.kind === 'directory') {
+      await copyDirectory(entry, newDirHandle, entry.name);
+    }
+  }
+}
+
+
+
+async function deleteItem(node) {
+  if (!rootHandle) return;
+
+  try {
+    // Get parent directory handle
+    const parentPath = node.path.substring(0, node.path.lastIndexOf('/'));
+    let parentHandle = rootHandle;
+
+    if (parentPath) {
+      const pathParts = parentPath.split('/');
+      for (const part of pathParts) {
+        parentHandle = await parentHandle.getDirectoryHandle(part);
+      }
+    }
+
+    // Remove the entry
+    await parentHandle.removeEntry(node.name, { recursive: node.kind === 'directory' });
+
+    // Refresh tree
+    fileHandles.clear();
+    fileContent.clear();
+    fileTree = { children: new Map(), name: rootHandle.name, path: '', kind: 'directory' };
+    await scanDirectory(rootHandle, fileTree);
+    renderFileTree();
+
+    // If deleted file was open, close it
+    if (currentFileHandle === node.handle) {
+      currentFileHandle = null;
+      document.getElementById('current-file-label').textContent = 'No file open';
+      editorHost.innerHTML = '<div class="empty-state"><h3>File deleted</h3><p>Select another file to edit</p></div>';
+    }
+  } catch (err) {
+    console.error("Error deleting item:", err);
+    alert("Could not delete item. " + err.message);
+  }
 }
 
 // Start
