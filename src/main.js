@@ -1,4 +1,5 @@
-import { EditorView, basicSetup, keymap } from "codemirror";
+import { EditorView, basicSetup } from "codemirror";
+import { keymap } from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
@@ -443,6 +444,95 @@ function getPathFromHandle(handle) {
 
 function isTextFile(name) {
   return /\.(html|css|js|txt|md|json|svg)$/i.test(name);
+}
+
+// --- Editor Actions ---
+
+async function saveCurrentFile() {
+  if (!currentFileHandle) return;
+  const path = getPathFromHandle(currentFileHandle);
+  if (!path) return;
+
+  const content = fileContent.get(path);
+  if (content === undefined) return;
+
+  try {
+    const writable = await currentFileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+
+    // Show feedback
+    const btn = document.getElementById('save-btn');
+    const originalText = btn.innerHTML;
+    btn.innerHTML = 'Saved!';
+    setTimeout(() => {
+      btn.innerHTML = originalText;
+    }, 2000);
+
+    // Refresh preview if needed
+    if (currentMode !== 'editor') {
+      updatePreview();
+    }
+  } catch (err) {
+    console.error("Save error:", err);
+    alert("Could not save file: " + err.message);
+  }
+}
+
+async function updatePreview() {
+  if (!rootHandle) return;
+
+  // Find index.html
+  let indexContent = fileContent.get('index.html');
+  if (!indexContent) {
+    // Try to find it if not loaded
+    if (fileHandles.has('index.html')) {
+      const handle = fileHandles.get('index.html');
+      const file = await handle.getFile();
+      indexContent = await file.text();
+      fileContent.set('index.html', indexContent);
+    }
+  }
+
+  if (!indexContent) {
+    previewFrame.srcdoc = "<html><body style='font-family:sans-serif; color:#888; text-align:center; margin-top:100px;'><h3>No index.html found in root</h3></body></html>";
+    return;
+  }
+
+  // Inject CSS and JS from the project for a better preview
+  // This is a naive injection - it replaces relative paths with inline content
+  let finalHtml = indexContent;
+
+  // For each CSS/JS file we have in virtual memory, try to replace patterns if possible
+  // or just use srcdoc as is. For now, srcdoc is the simplest.
+  previewFrame.srcdoc = finalHtml;
+}
+
+function toggleViewMode() {
+  const btn = document.getElementById('view-toggle-btn');
+  const span = btn.querySelector('span');
+
+  if (currentMode === 'editor') {
+    currentMode = 'split';
+    previewPane.classList.remove('hidden');
+    editorPane.style.display = 'flex'; // Ensure visible
+    span.textContent = 'Preview';
+  } else if (currentMode === 'split') {
+    currentMode = 'preview';
+    editorPane.classList.add('hidden');
+    previewPane.classList.remove('hidden'); // Ensure visible
+    previewPane.style.flex = '1';
+    span.textContent = 'Editor';
+  } else {
+    currentMode = 'editor';
+    editorPane.classList.remove('hidden');
+    previewPane.classList.add('hidden');
+    span.textContent = 'Split';
+  }
+
+  if (currentMode !== 'editor') {
+    updatePreview();
+  }
 }
 
 // --- Search Logic ---
