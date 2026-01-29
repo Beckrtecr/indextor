@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Indextor</title>
+  <link rel="icon" type="image/png" href="./logo.png" />
+  <script type="module" crossorigin src="./assets/index-DHjahMjU.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index--XnzBYZP.css">
+</head>
+
+<body>
+  <div class="app-container">
+    <header class="glass">
+      <div class="logo-container">
+        <img src="./logo.png" alt="Indextor Logo" class="logo-img" />
+        <span class="logo-text">Indextor</span>
+      </div>
+
+      <div class="header-controls">
+        <button id="folder-btn" class="btn btn-secondary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          Open Folder
+        </button>
+
+        <button id="view-toggle-btn" class="btn btn-secondary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
+          </svg>
+          <span>Preview</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="main-content">
+      <!-- Side Panel (Now just the file tree) -->
+      <aside class="sidebar glass" id="sidebar">
+
+        <!-- Explorer View -->
+        <div id="explorer-view" class="sidebar-view">
+          <div class="sidebar-header">
+            <span class="sidebar-title">Files</span>
+            <div class="sidebar-actions">
+              <button id="new-file-btn" class="icon-btn" title="New File" style="margin-left: auto;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                  <polyline points="13 2 13 9 20 9"></polyline>
+                  <line x1="12" y1="18" x2="12" y2="12"></line>
+                  <line x1="9" y1="15" x2="15" y2="15"></line>
+                </svg>
+              </button>
+              <button id="new-folder-btn" class="icon-btn" title="New Folder">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                  <line x1="12" y1="11" x2="12" y2="17"></line>
+                  <line x1="9" y1="14" x2="15" y2="14"></line>
+                </svg>
+              </button>
+              <button id="import-file-btn" class="icon-btn" title="Import File">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="file-list" class="file-tree">
+            <div class="empty-message">No folder open</div>
+          </div>
+        </div>
+
+        <!-- Resizer Handle -->
+        <div class="resizer" id="sidebar-resizer"></div>
+      </aside>
+
+      <main class="workspace">
+        <div class="editor-container glass" id="editor-pane">
+          <div class="panel-header">
+            <span id="current-file-label">index.html</span>
+            <button id="save-btn" class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem;">Save
+              (Cmd+S)</button>
+          </div>
+          <div id="editor-host" style="flex: 1; overflow: hidden;"></div>
+        </div>
+
+        <div class="resizer workspace-resizer hidden" id="workspace-resizer"></div>
+
+        <div class="preview-container hidden" id="preview-pane">
+          <div class="panel-header">
+            <span>Preview</span>
+            <button id="refresh-preview" class="btn btn-secondary btn-icon"
+              style="padding: 4px; width: 24px; height: 24px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+            </button>
+          </div>
+          <iframe id="preview-frame" sandbox="allow-scripts allow-same-origin"></iframe>
+        </div>
+      </main>
+    </div>
+  </div>
+</body>
+
+</html>
