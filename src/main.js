@@ -1,5 +1,5 @@
-import { EditorView, basicSetup, EditorState } from "codemirror";
-import { keymap } from "@codemirror/view";
+import { EditorView, basicSetup } from "codemirror";
+import { EditorState, Compartment } from "@codemirror/state";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
@@ -46,7 +46,7 @@ async function init() {
 }
 
 async function initEditor() {
-  const { Compartment } = await import("@codemirror/state");
+  /* const { Compartment } = await import("@codemirror/state"); // Imported at top level */
   const themeRef = new Compartment();
   window.themeCompartment = themeRef; // Global ref for toggle
 
