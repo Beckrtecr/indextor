@@ -9,6 +9,19 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { autocompletion, closeBrackets, completionKeymap, closeBracketsKeymap, snippet } from "@codemirror/autocomplete";
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting, defaultHighlightStyle, LanguageDescription } from "@codemirror/language";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { python } from "@codemirror/lang-python";
+import { java } from "@codemirror/lang-java";
+import { cpp } from "@codemirror/lang-cpp";
+import { sql } from "@codemirror/lang-sql";
+import { rust } from "@codemirror/lang-rust";
+import { go } from "@codemirror/lang-go";
+import { php } from "@codemirror/lang-php";
+import { json } from "@codemirror/lang-json";
+import { StreamLanguage } from "@codemirror/language";
+import { csharp, kotlin } from "@codemirror/legacy-modes/mode/clike";
+import { swift } from "@codemirror/legacy-modes/mode/swift";
+
+
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 import LightningFS from "@isomorphic-git/lightning-fs";
@@ -653,7 +666,21 @@ async function loadFile(path) {
   let langExt = html();
   if (path.endsWith('.css')) langExt = css();
   if (path.endsWith('.js')) langExt = javascript();
-  if (path.endsWith('.json')) langExt = javascript();
+  if (path.endsWith('.jsx')) langExt = javascript({ jsx: true });
+  if (path.endsWith('.ts')) langExt = javascript({ typescript: true });
+  if (path.endsWith('.tsx')) langExt = javascript({ typescript: true, jsx: true });
+  if (path.endsWith('.py')) langExt = python();
+  if (path.endsWith('.java')) langExt = java();
+  if (path.endsWith('.cpp') || path.endsWith('.h') || path.endsWith('.hpp') || path.endsWith('.cc')) langExt = cpp();
+  if (path.endsWith('.sql')) langExt = sql();
+  if (path.endsWith('.rs')) langExt = rust();
+  if (path.endsWith('.go')) langExt = go();
+  if (path.endsWith('.php')) langExt = php();
+  if (path.endsWith('.json')) langExt = json();
+  if (path.endsWith('.cs')) langExt = StreamLanguage.define(csharp);
+  if (path.endsWith('.kt')) langExt = StreamLanguage.define(kotlin);
+  if (path.endsWith('.swift')) langExt = StreamLanguage.define(swift);
+
 
   // Initialize Editor
   try {
@@ -675,19 +702,46 @@ function getPathFromHandle(handle) {
 }
 
 function isTextFile(name) {
-  return /\.(html|css|js|txt|md|json|svg)$/i.test(name);
+  return /\.(html|css|js|jsx|ts|tsx|py|java|cpp|h|hpp|cc|sql|rs|go|php|json|cs|kt|swift|txt|md|svg)$/i.test(name);
 }
+
 
 function getIconForFile(name, kind) {
   if (kind === 'directory') {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #64748b;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
   } else {
+    name = name.toLowerCase();
     if (name.endsWith('.html')) {
       return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
     } else if (name.endsWith('.css')) {
       return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#264de4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>`;
-    } else if (name.endsWith('.js')) {
+    } else if (name.endsWith('.js') || name.endsWith('.jsx')) {
       return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f0db4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"></path><path d="M14 9.3V1.99"></path><path d="M8.5 2C4.36 2 1 5.36 1 9.5c0 3.8 2.87 6.96 6.56 7.42"></path><path d="M15 2c4.14 0 7.5 3.36 7.5 7.5 0 3.8-2.87 6.96-6.56 7.42"></path><path d="M10 21V12"></path><path d="M14 12v9"></path></svg>`;
+    } else if (name.endsWith('.ts') || name.endsWith('.tsx')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3178c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M7 8h3m-1.5 0v8m2.5-8h4m-2 0v8"></path></svg>`;
+    } else if (name.endsWith('.py')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3776ab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10m0 0l-4-4m4 4l4-4"></path><circle cx="12" cy="12" r="10"></circle></svg>`;
+    } else if (name.endsWith('.java')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#b07219" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a3 3 0 0 0-3-3H5a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V8z"></path><path d="M10 12l4-4"></path></svg>`;
+    } else if (name.endsWith('.cpp') || name.endsWith('.h') || name.endsWith('.hpp')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00599c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M14.8 9c-.4-.4-.9-.6-1.4-.6-1.1 0-2 .9-2 2s.9 2 2 2c.5 0 1-.2 1.4-.6"></path></svg>`;
+    } else if (name.endsWith('.sql')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#336791" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>`;
+    } else if (name.endsWith('.cs')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#178600" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l10 5v10l-10 5-10-5V7l10-5z"></path><path d="M7 10h4m-4 4h4m1 1l3-10"></path></svg>`;
+    } else if (name.endsWith('.rs')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#dea584" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8m-4-4v8"></path></svg>`;
+    } else if (name.endsWith('.go')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00add8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8h-6a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h6l4-4-4-4z"></path></svg>`;
+    } else if (name.endsWith('.php')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4f5b93" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="10" ry="6"></ellipse><path d="M9 12h6"></path></svg>`;
+    } else if (name.endsWith('.kt')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7f52ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 21H3V3h18l-9 9 9 9z"></path></svg>`;
+    } else if (name.endsWith('.swift')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f05138" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 13s-5-1-11-1-11 1-11 1c5-3 10-6 10-6s-5-3-10-6c0 0 5 1 11 1s11-1 11-1c-5 3-10 6-10 6s5 3 10 6z"></path></svg>`;
+    } else if (name.endsWith('.json')) {
+
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#cbcb41" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 20l-4-4 4-4m4 0l4 4-4 4"></path><path d="M4 8V6a2 2 0 0 1 2-2h2m8 0h2a2 2 0 0 1 2 2v2m0 8v2a2 2 0 0 1-2 2h-2m-8 0H6a2 2 0 0 1-2-2v-2"></path></svg>`;
     } else if (isImageFile(name)) {
       return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#aa00ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`;
     } else {
@@ -695,6 +749,7 @@ function getIconForFile(name, kind) {
     }
   }
 }
+
 
 function renderTabs() {
   const tabsContainer = document.getElementById('file-tabs');
@@ -838,18 +893,22 @@ async function updatePreview(previewFile) {
 
 function showFileSelectionModal() {
   return new Promise((resolve) => {
-    const htmlFiles = Array.from(fileHandles.keys()).filter(path => path.endsWith('.html'));
+    const previewableExtensions = ['.html', '.json', '.jsx', '.tsx', '.py', '.java', '.cpp', '.sql', '.rs', '.go', '.php', '.cs', '.kt', '.swift', '.ts'];
+    const previewableFiles = Array.from(fileHandles.keys()).filter(path =>
+      previewableExtensions.some(ext => path.toLowerCase().endsWith(ext))
+    );
 
-    if (htmlFiles.length === 0) {
-      alert("No HTML files found in the project.");
+    if (previewableFiles.length === 0) {
+      alert("No previewable files found in the project.");
       resolve(null);
       return;
     }
 
-    if (htmlFiles.length === 1) {
-      resolve(htmlFiles[0]);
+    if (previewableFiles.length === 1) {
+      resolve(previewableFiles[0]);
       return;
     }
+
 
     // Create modal
     const modalOverlay = document.createElement('div');
@@ -864,15 +923,19 @@ function showFileSelectionModal() {
         <button class="icon-btn" id="modal-close">×</button>
       </div>
       <div class="modal-body">
-        ${htmlFiles.map(path => `
+        ${previewableFiles.map(path => {
+      const ext = path.split('.').pop();
+      return `
           <div class="file-select-item" data-path="${path}">
             <span class="icon">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+              <span style="font-size: 10px; font-weight: bold; opacity: 0.7;">${ext.toUpperCase()}</span>
             </span>
             <span>${path}</span>
           </div>
-        `).join('')}
+          `;
+    }).join('')}
       </div>
+
     `;
 
     modalOverlay.appendChild(modalContent);
