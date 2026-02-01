@@ -87,6 +87,7 @@ const GIT_DIR = "/repo"; // Virtual path in LightningFS
 // State
 let rootHandle = null;
 let currentFileHandle = null;
+let openTabs = []; // Array of paths
 let fileHandles = new Map(); // path -> handle
 let fileContent = new Map(); // path -> content
 let editor = null;
@@ -95,6 +96,7 @@ let currentMode = 'editor'; // split, editor, preview
 let creatingNewItem = null; // { type: 'file' | 'folder', parentNode: node }
 let renamingItem = null;
 let currentPreviewFile = 'index.html';
+let searchQuery = '';
 
 // DOM Elements
 const editorHost = document.getElementById("editor-host");
@@ -226,6 +228,15 @@ function setupEventListeners() {
       saveCurrentFile();
     }
   });
+
+  // Search functionality
+  const searchInput = document.getElementById('sidebar-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      searchQuery = e.target.value.toLowerCase();
+      renderFileTree();
+    });
+  }
 }
 
 // --- Sidebar Logic ---
@@ -304,6 +315,7 @@ async function openFolder() {
     // Reset state
     fileHandles.clear();
     fileContent.clear();
+    openTabs = [];
     fileTree = { children: new Map(), name: handle.name, path: '', kind: 'directory' };
 
     fileListEl.innerHTML = '';
@@ -420,12 +432,37 @@ function renderFileTree() {
     return a.kind === 'directory' ? -1 : 1;
   });
 
+  let hasMatches = false;
   children.forEach(child => {
-    fileListEl.appendChild(createTreeElement(child, 0));
+    const el = createTreeElement(child, 0);
+    if (el) {
+      fileListEl.appendChild(el);
+      hasMatches = true;
+    }
   });
+
+  if (!hasMatches && searchQuery) {
+    fileListEl.innerHTML = `<div class="empty-message">No files match "${searchQuery}"</div>`;
+  }
+}
+
+function hasSearchMatch(node, query) {
+  if (!query) return true;
+  if (node.name.toLowerCase().includes(query)) return true;
+  if (node.kind === 'directory') {
+    for (const child of node.children.values()) {
+      if (hasSearchMatch(child, query)) return true;
+    }
+  }
+  return false;
 }
 
 function createTreeElement(node, level) {
+  // If searching, hide nodes that don't match and aren't parents of matches
+  if (searchQuery && !hasSearchMatch(node, searchQuery)) {
+    return null;
+  }
+
   const container = document.createElement('div');
   container.className = node.kind === 'directory' ? 'folder-container' : 'file-container';
 
@@ -434,8 +471,9 @@ function createTreeElement(node, level) {
   item.style.paddingLeft = `${level * 12}px`; // indent
 
   // If directory -> add id for open state
+  const isActuallyOpen = node.isOpen || (searchQuery && hasSearchMatch(node, searchQuery));
   if (node.kind === 'directory') {
-    if (node.isOpen) container.classList.add('folder-open');
+    if (isActuallyOpen) container.classList.add('folder-open');
   }
 
   // Arrow
@@ -449,21 +487,7 @@ function createTreeElement(node, level) {
   const icon = document.createElement('div');
   icon.className = 'icon-box';
 
-  if (node.kind === 'directory') {
-    icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #64748b;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
-  } else {
-    if (node.name.endsWith('.html')) {
-      icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
-    } else if (node.name.endsWith('.css')) {
-      icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#264de4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>`;
-    } else if (node.name.endsWith('.js')) {
-      icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f0db4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"></path><path d="M14 9.3V1.99"></path><path d="M8.5 2C4.36 2 1 5.36 1 9.5c0 3.8 2.87 6.96 6.56 7.42"></path><path d="M15 2c4.14 0 7.5 3.36 7.5 7.5 0 3.8-2.87 6.96-6.56 7.42"></path><path d="M10 21V12"></path><path d="M14 12v9"></path></svg>`;
-    } else if (isImageFile(node.name)) {
-      icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#aa00ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`;
-    } else {
-      icon.innerHTML = '📄';
-    }
-  }
+  icon.innerHTML = getIconForFile(node.name, node.kind);
 
   // Content wrapper
   const content = document.createElement('div');
@@ -546,7 +570,7 @@ function createTreeElement(node, level) {
   container.appendChild(item);
 
   // Render Children if open
-  if (node.kind === 'directory' && node.isOpen) {
+  if (node.kind === 'directory' && isActuallyOpen) {
     const childrenContainer = document.createElement('div');
     childrenContainer.className = 'folder-children';
 
@@ -556,7 +580,8 @@ function createTreeElement(node, level) {
     });
 
     sortedChildren.forEach(child => {
-      childrenContainer.appendChild(createTreeElement(child, level + 1));
+      const el = createTreeElement(child, level + 1);
+      if (el) childrenContainer.appendChild(el);
     });
     container.appendChild(childrenContainer);
   }
@@ -579,6 +604,12 @@ async function loadFile(path) {
   if (activeEl) activeEl.classList.add('active');
 
   document.getElementById('current-file-label').textContent = path;
+
+  // Tabs logic
+  if (!openTabs.includes(path)) {
+    openTabs.push(path);
+  }
+  renderTabs();
 
   // Handle Images
   if (isImageFile(path)) {
@@ -647,6 +678,74 @@ function isTextFile(name) {
   return /\.(html|css|js|txt|md|json|svg)$/i.test(name);
 }
 
+function getIconForFile(name, kind) {
+  if (kind === 'directory') {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #64748b;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
+  } else {
+    if (name.endsWith('.html')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e44d26" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
+    } else if (name.endsWith('.css')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#264de4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>`;
+    } else if (name.endsWith('.js')) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f0db4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"></path><path d="M14 9.3V1.99"></path><path d="M8.5 2C4.36 2 1 5.36 1 9.5c0 3.8 2.87 6.96 6.56 7.42"></path><path d="M15 2c4.14 0 7.5 3.36 7.5 7.5 0 3.8-2.87 6.96-6.56 7.42"></path><path d="M10 21V12"></path><path d="M14 12v9"></path></svg>`;
+    } else if (isImageFile(name)) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#aa00ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`;
+    } else {
+      return '📄';
+    }
+  }
+}
+
+function renderTabs() {
+  const tabsContainer = document.getElementById('file-tabs');
+  if (!tabsContainer) return;
+
+  tabsContainer.innerHTML = '';
+  openTabs.forEach(path => {
+    const fileName = path.split('/').pop();
+    const tabEl = document.createElement('div');
+    const isActive = currentFileHandle && getPathFromHandle(currentFileHandle) === path;
+    tabEl.className = `tab ${isActive ? 'active' : ''}`;
+
+    tabEl.innerHTML = `
+      <div class="tab-icon">${getIconForFile(fileName, 'file')}</div>
+      <span class="tab-name" title="${path}">${fileName}</span>
+      <div class="tab-close" title="Close Tab">×</div>
+    `;
+
+    tabEl.onclick = () => loadFile(path);
+    tabEl.querySelector('.tab-close').onclick = (e) => {
+      e.stopPropagation();
+      closeTab(path);
+    };
+
+    tabsContainer.appendChild(tabEl);
+
+    // Scroll into view if active
+    if (isActive) {
+      tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    }
+  });
+}
+
+async function closeTab(path) {
+  const index = openTabs.indexOf(path);
+  if (index === -1) return;
+
+  openTabs.splice(index, 1);
+
+  if (openTabs.length === 0) {
+    currentFileHandle = null;
+    showWelcomeScreen();
+  } else if (currentFileHandle && getPathFromHandle(currentFileHandle) === path) {
+    // Open the next available tab
+    const nextPath = openTabs[Math.min(index, openTabs.length - 1)];
+    await loadFile(nextPath);
+  } else {
+    renderTabs();
+  }
+}
+
 // --- Editor Actions ---
 
 async function saveCurrentFile() {
@@ -681,19 +780,47 @@ async function saveCurrentFile() {
 }
 
 async function syncFilesToSW() {
+  if (!navigator.serviceWorker.controller) {
+    console.log('[Main] Waiting for Service Worker controller...');
+    await new Promise(resolve => {
+      const handler = () => {
+        if (navigator.serviceWorker.controller) {
+          navigator.serviceWorker.removeEventListener('controllerchange', handler);
+          resolve();
+        }
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', handler);
+      setTimeout(resolve, 1000); // 1s fallback
+    });
+  }
+
   if (navigator.serviceWorker.controller) {
     const filesObj = {};
     for (const [path, content] of fileContent.entries()) {
-      // Transfer buffers directly if possible, or convert to typed arrays
-      if (content instanceof ArrayBuffer) {
-        filesObj[path] = content;
-      } else {
-        filesObj[path] = content;
-      }
+      filesObj[path] = content;
     }
-    navigator.serviceWorker.controller.postMessage({
-      type: 'SET_FILES',
-      files: filesObj
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        console.warn('[Main] Sync to SW timed out');
+        resolve();
+      }, 2000);
+
+      const messageHandler = (event) => {
+        if (event.data && event.data.type === 'FILES_SET_ACK') {
+          clearTimeout(timeout);
+          navigator.serviceWorker.removeEventListener('message', messageHandler);
+          console.log('[Main] Sync to SW successful');
+          resolve();
+        }
+      };
+
+      navigator.serviceWorker.addEventListener('message', messageHandler);
+
+      navigator.serviceWorker.controller.postMessage({
+        type: 'SET_FILES',
+        files: filesObj
+      });
     });
   }
 }
@@ -1070,6 +1197,18 @@ async function finalizeRename(node, newName) {
     await scanDirectory(rootHandle, fileTree);
     renderFileTree();
 
+    // Update openTabs
+    openTabs = openTabs.map(path => {
+      if (path === node.path) {
+        return parentPath ? `${parentPath}/${newName}` : newName;
+      }
+      if (node.kind === 'directory' && path.startsWith(node.path + '/')) {
+        const newPrefix = parentPath ? `${parentPath}/${newName}` : newName;
+        return path.replace(node.path, newPrefix);
+      }
+      return path;
+    });
+
     // If renamed file was open, update handle or close
     if (currentFileHandle === node.handle) {
       currentFileHandle = null;
@@ -1078,7 +1217,11 @@ async function finalizeRename(node, newName) {
       if (node.kind === 'file') {
         const newPath = parentPath ? `${parentPath}/${newName}` : newName;
         await loadFile(newPath);
+      } else {
+        renderTabs();
       }
+    } else {
+      renderTabs();
     }
   } catch (err) {
     console.error("Error renaming item:", err);
@@ -1130,11 +1273,26 @@ async function deleteItem(node) {
     await scanDirectory(rootHandle, fileTree);
     renderFileTree();
 
+    // Update openTabs
+    const wasOpen = openTabs.includes(node.path);
+    openTabs = openTabs.filter(path => {
+      if (path === node.path) return false;
+      if (node.kind === 'directory' && path.startsWith(node.path + '/')) return false;
+      return true;
+    });
+
     // If deleted file was open, close it
-    if (currentFileHandle === node.handle) {
+    if (currentFileHandle === node.handle || (node.kind === 'file' && wasOpen)) {
       currentFileHandle = null;
       document.getElementById('current-file-label').textContent = 'No file open';
-      editorHost.innerHTML = '<div class="empty-state"><h3>File deleted</h3><p>Select another file to edit</p></div>';
+
+      if (openTabs.length > 0) {
+        await loadFile(openTabs[0]);
+      } else {
+        showWelcomeScreen();
+      }
+    } else {
+      renderTabs();
     }
   } catch (err) {
     console.error("Error deleting item:", err);

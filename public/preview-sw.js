@@ -15,6 +15,10 @@ self.addEventListener('message', (event) => {
             files.set(path, content);
         }
         console.log('[SW] Files updated', files.size);
+        // Send acknowledgement
+        if (event.source) {
+            event.source.postMessage({ type: 'FILES_SET_ACK' });
+        }
     }
 });
 
@@ -23,25 +27,29 @@ self.addEventListener('fetch', (event) => {
 
     // Only intercept requests to our virtual preview path
     if (url.pathname.startsWith('/preview/')) {
-        const relativePath = url.pathname.replace('/preview/', '');
+        // Decode URI components to handle spaces and special characters
+        const relativePath = decodeURIComponent(url.pathname.replace('/preview/', ''));
         const cleanPath = relativePath || 'index.html';
 
         console.log('[SW] Fetching:', cleanPath);
 
         if (files.has(cleanPath)) {
             const content = files.get(cleanPath);
+            const lowerPath = cleanPath.toLowerCase();
             let contentType = 'text/plain';
 
-            if (cleanPath.endsWith('.html')) contentType = 'text/html';
-            else if (cleanPath.endsWith('.css')) contentType = 'text/css';
-            else if (cleanPath.endsWith('.js')) contentType = 'application/javascript';
-            else if (cleanPath.endsWith('.png')) contentType = 'image/png';
-            else if (cleanPath.endsWith('.jpg') || cleanPath.endsWith('.jpeg')) contentType = 'image/jpeg';
-            else if (cleanPath.endsWith('.svg')) contentType = 'image/svg+xml';
-            else if (cleanPath.endsWith('.gif')) contentType = 'image/gif';
-            else if (cleanPath.endsWith('.webp')) contentType = 'image/webp';
-            else if (cleanPath.endsWith('.ico')) contentType = 'image/x-icon';
-            else if (cleanPath.endsWith('.json')) contentType = 'application/json';
+            if (lowerPath.endsWith('.html')) contentType = 'text/html';
+            else if (lowerPath.endsWith('.css')) contentType = 'text/css';
+            else if (lowerPath.endsWith('.js')) contentType = 'application/javascript';
+            else if (lowerPath.endsWith('.png')) contentType = 'image/png';
+            else if (lowerPath.endsWith('.jpg') || lowerPath.endsWith('.jpeg')) contentType = 'image/jpeg';
+            else if (lowerPath.endsWith('.svg')) contentType = 'image/svg+xml';
+            else if (lowerPath.endsWith('.gif')) contentType = 'image/gif';
+            else if (lowerPath.endsWith('.webp')) contentType = 'image/webp';
+            else if (lowerPath.endsWith('.ico')) contentType = 'image/x-icon';
+            else if (lowerPath.endsWith('.json')) contentType = 'application/json';
+            else if (lowerPath.endsWith('.xml')) contentType = 'application/xml';
+            else if (lowerPath.endsWith('.txt')) contentType = 'text/plain';
 
             event.respondWith(new Response(content, {
                 headers: { 'Content-Type': contentType }
