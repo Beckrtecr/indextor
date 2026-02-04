@@ -26,9 +26,11 @@ self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
     // Only intercept requests to our virtual preview path
-    if (url.pathname.startsWith('/preview/')) {
+    if (url.pathname.includes('/preview/')) {
         // Decode URI components to handle spaces and special characters
-        const relativePath = decodeURIComponent(url.pathname.replace('/preview/', ''));
+        // Extract everything after '/preview/'
+        const matchIndex = url.pathname.indexOf('/preview/');
+        const relativePath = decodeURIComponent(url.pathname.substring(matchIndex + 9)); // 9 is length of '/preview/'
         const cleanPath = relativePath || 'index.html';
 
         console.log('[SW] Fetching:', cleanPath);
@@ -224,7 +226,14 @@ self.addEventListener('fetch', (event) => {
                 </head>
                 <body>
                     <div class="error-container">
-                        <img src="/error.png" alt="Could not connect to file" />
+                        <script>
+                            const swPath = "${self.location.pathname}";
+                            const appScope = swPath.substring(0, swPath.lastIndexOf('/'));
+                            document.write('<img src="' + appScope + '/error.png" alt="Could not connect to file" />');
+                        </script>
+                        <noscript>
+                             <img src="./error.png" alt="Could not connect to file" />
+                        </noscript>
                         <h2>Oops! Could not find "${cleanPath}"</h2>
                     </div>
                 </body>

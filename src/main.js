@@ -888,7 +888,7 @@ async function updatePreview(previewFile) {
   await syncFilesToSW();
 
   const timestamp = Date.now();
-  previewFrame.src = `/preview/${fileToUse}?t=${timestamp}`;
+  previewFrame.src = `preview/${fileToUse}?t=${timestamp}`;
 }
 
 function showFileSelectionModal() {
